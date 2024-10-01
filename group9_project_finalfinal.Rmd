@@ -1,0 +1,561 @@
+---
+title: "Predicting Sleep Duration on Health, Life Style Among Different Occupations"
+author:
+- Kirsten Hu
+- Xiaojun Liu
+- Yiting Shen
+- Dominik Duc Duy Nguyen
+- John Burks
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: readable
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_download: false
+  pdf_document:
+    toc: true
+    toc_depth: '4'
+subtitle: "Group 9"
+---
+
+```{r setup, include = FALSE}
+options(max.print= 120,
+        width = 90,
+        tibble.width = 80)
+knitr::opts_chunk$set(echo= TRUE,
+                      cache=FALSE,
+                      prompt=FALSE,
+                      tidy="styler",
+                      comment=NA,
+                      message=FALSE,
+                      warning=TRUE)
+
+knitr::opts_knit$set(width=90)
+knitr::opts_chunk$set(cache.extra = knitr::rand_seed)
+set.seed(42)
+```
+
+# Checklist {-}
+
+The submission includes the following.
+
+- [X] RMD document where it's clear what is the code that corresponds to each question. 
+- [X] Dataset
+- [X] html/PDF document with the following
+    - [X] Numbered questions and answers with text and all the necessary code.
+    - [X] Subtitle indicates the group number 
+    - [X] Name of all group members
+    - [X] Details of specification of the work done by group members (e.g., who found the data, who did the pre-processing, who answered which questions, etc).
+    - [X] Statement of technology. Did you use any AI tools? How?
+
+
+# Group project {-}
+
+For the project, we use the following packages:
+
+```{r, message = FALSE}
+## ...
+library(tidyr)
+library(dplyr) 
+library(glue)
+library(brms)
+library(ggplot2)
+library(priorsense)
+library(mlr3measures)
+library(testthat)
+options(mc.cores = parallel::detectCores()) # paralellize if possible
+options(brms.file_refit = "on_change") # save the files if the model has changed
+ggplot2::theme_set(ggplot2::theme_light()) # nicer theme
+```
+
+## 1. Dataset Selection (0.5pt)
+Select a dataset with clusters such as schools, regions, or people with multiple observations per individual. (From for example, https://www.kaggle.com/) It would be a good idea to choose a smallish dataset (not too many rows, e.g., less than 1000) or subset it so that fitting the models doesn't take too long. 
+
+a. Describe the dataset with a couple of short sentences. What was its intended use? Are there papers that reference it? Provide information on how to obtain the dataset, including its source and any necessary preprocessing steps/feature engineering.
+
+
+<!-- DESCRIBE IT BELOW -->
+
+> The follwing "Sleep Health and Lifestyle Dataset" (Tharmalingam, 2023) is designed to provide insights into various factors influencing sleep patterns and overall health. The data is synthetic and the team received permission to use it for this project from the course professor. To the team's knowledge, it has not been used in literature. However, it is accompanied by 162 corresponding notebooks on Kaggle. The dataset can be found on Kaggle at https://www.kaggle.com/datasets/uom190346a/sleep-health-and-lifestyle-dataset.
+
+> Data Processing: 
+First, we started by one-hot encoding the categorical variable "Gender" into binary values: 0 for male and 1 for female. Then, we did the same for the  categories in the "BMI" variable, combining "overweight" and "obese" into one category, and "normal" and "normal weight" into another. Afterward, we one-hot encoded the "BMI" variable into 0 for normal weight and 1 for overweight. Additionally, we one-hot encoded the "Sleep Disorder" variable into 0 for no sleep disorder and 1 for having a sleep disorder, which includes insomnia or sleep apnea. Finally, we split the "Blood Pressure" variable into systolic and diastolic components, where systolic blood pressure represents the highest arterial pressure during systole and diastolic blood pressure presents the lowest pressure during diastole.
+
+```{r}
+# Data Preprocessing
+# Load the data and check the data that needs processing 
+sleep<-read.csv("Sleep_health_and_lifestyle_dataset.csv") 
+distinct(sleep,Gender)
+distinct(sleep,BMI.Category)  
+distinct(sleep,Sleep.Disorder) 
+
+#Group variables in BMI.Category and Sleep.Disorder, then one-hot encode them 
+sleep <- sleep %>%
+  mutate(Gender = ifelse(Gender =="Male",0, 1), # One-Hot Encode Gend
+  BMI.Category = ifelse(BMI.Category %in% c("Overweight", "Obese"), 1, 0), 
+  Sleep.Disorder = ifelse(Sleep.Disorder =="None", 0, 1))
+
+
+#Spit Blood.Pressure into Systolic Blood Pressure and Diastolic Blood.Pressure
+sleep <- sleep %>%
+  separate(Blood.Pressure, into = c("systolic.BP", "diastolic.BP"), sep = "/")
+sleep$systolic.BP <- as.numeric(sleep$systolic.BP)
+sleep$diastolic.BP <- as.numeric(sleep$diastolic.BP)
+
+
+#Change Occupation to as.factor 
+sleep$Occupation <- as.factor(sleep$Occupation)
+
+
+
+```
+
+b. Report the number of observations, columns (with their meaning) and their data types. Indicate clearly what you will use as dependent variable/label. 
+
+<!-- REPORT IT BELOW -->
+
+> The dataset include 374 observations and 13 columns it includes a wide range of variables such as:
+
+> Person ID: An identifier for each individual.
+Gender(Integer): The gender of the person (Male/Female).
+Age(Integer): The age of the person in years.
+Occupation(String): The occupation or profession of the person.
+Sleep Duration (Float)(hours): The number of hours the person sleeps per day.
+Quality of Sleep (Integer)(scale: 1-10): A subjective rating of the quality of sleep, ranging from 1 to 10.
+Physical Activity Level (Integer)(minutes/day): The number of minutes the person engages in physical activity daily.
+Stress Level (Integer)(scale: 1-10): A subjective rating of the stress level experienced by the person, ranging from 1 to 10.
+BMI Category (Integer): The BMI category of the person (e.g., Underweight, Normal, Overweight).
+Blood Pressure (Integer)(systolic/diastolic): The blood pressure measurement of the person, indicated as systolic pressure over diastolic pressure.
+Heart Rate (Integer)(bpm): The resting heart rate of the person in beats per minute.
+Daily Steps(Integer): The number of steps the person takes per day.
+Sleep Disorder(Integer): The presence or absence of a sleep disorder in the person (None, Insomnia, Sleep Apnea).
+
+> We use Sleep Duration as dependent variable, and the rest as independent variables.
+
+## 2. Split the data and tranform columns as necessary. (0.5pt)
+ Split the data into training (80%) and test set (80%). Transform the columns if necessary.
+```{r}
+# Set the random seed
+#set.seed(235711)
+
+# Create a vector to assign observations to a training and testing set
+nrow(sleep)
+ind <- sample(c(rep("train", nrow(sleep)*0.80), rep("test", nrow(sleep)*0.20)))
+
+# Assign rows of the data to the training and testing sets
+tmp <- split(sleep, ind)
+
+# Create data.frames for the training and test sets
+sleep_train<- tmp$train
+sleep_test <- tmp$test
+saveRDS(sleep_train,"sleep_train.rds")
+saveRDS(sleep_test,"sleep_test.rds")
+
+# Identify work directory 
+work_directory <- "~/Desktop/bayesian/Assignment"
+```
+
+## 3. Model Exploration (3pt)
+
+a. Fit multiple appropriate models to the dataset (as many models as there are members in the group, with a minimum of two models). Models might vary in the multilevel structure, informativeness of their priors (but not just trivial changes), model of the data/likelihood, etc. (I recommend not to use no pooling models since they tend to take a long time and it's very hard to assign good priors).
+
+<!-- message = FALSE, results = "hide" prevents displaying output, if you need to show something create another chunk of code -->
+```{r, message = FALSE, results = "hide"}
+
+# Yiting's Own Priors 
+#Intercept
+
+my_prior <- c(prior(normal(7.5, 1.3), class = Intercept),
+  prior(normal(120,71), class = b,coef=systolic.BP),
+  prior(normal(80,45), class = b,coef=diastolic.BP),
+  prior(exponential(1.2), class = sigma))
+fileyt <- file.path(work_directory, "Yiting_model")
+
+# Yiting's Model
+Yiting_model <- brm(Sleep.Duration ~ BMI.Category + systolic.BP + diastolic.BP + Stress.Level+ (Stress.Level|| Occupation),
+                  data = sleep_train,
+                  prior = my_prior,
+                  control = list(adapt_delta = .9),
+                  file = fileyt)
+
+```
+```{r}
+summary(Yiting_model)
+```
+
+
+```{r, message = FALSE, results = "hide"}
+gelman_priors <- c(prior(normal(7,2), class = Intercept),
+                # removing `coef =` sets the same prior to every slope
+                   prior(normal(0, 2), class = b),
+                   prior(exponential(1.2458), class = sd))
+filexj <- file.path(work_directory, "Xiaojun_model")
+Xiaojun_model <- brm(Sleep.Duration ~ Quality.of.Sleep + Stress.Level + BMI.Category 
+                 + Heart.Rate + Sleep.Disorder + Age+  Sleep.Disorder:Stress.Level + (1 + Stress.Level || Occupation),
+                 data = sleep_train,
+                 prior = gelman_priors,
+                 family =lognormal(),
+                 control = list(adapt_delta = 0.99, max_treedepth = 12),
+                 seed = 123,  
+                 file = filexj)
+```
+
+
+```{r}
+summary(Xiaojun_model)
+```
+
+
+
+
+```{r, message = FALSE, results = "hide"}
+
+# John's Gelman Priors 
+gelmanPrior <- c(prior(normal(7.158667, 2.006821), class = Intercept),
+               prior(normal(0, 1.635375), class = b, coef=Quality.of.Sleep),
+               prior(normal(0, 4.063786), class = b, coef=Sleep.Disorder),
+               prior(exponential(1.245751), class = sigma),
+               prior(exponential(1.245751), class = sd))
+filejn <- file.path(work_directory, "john_group_project")
+
+
+
+# John's Model
+john_model <- brm(Sleep.Duration ~ 1 + Quality.of.Sleep + Sleep.Disorder + 
+                   (1 + Quality.of.Sleep || Occupation), data = sleep_train, 
+                 family = lognormal(),
+                 prior = gelmanPrior,
+                 iter = 3000,
+                 control = list(adapt_delta = 0.99, max_treedepth = 12),
+                 seed = 123, 
+                 file = filejn)
+
+```
+```{r}
+summary(john_model)
+```
+
+
+
+```{r, message = FALSE, results = "hide"}
+# Kirsten's Own Priors   
+
+k_sleep_train <- sleep_train %>%
+  mutate(across(c(Age, Quality.of.Sleep, Physical.Activity.Level, Stress.Level, BMI.Category, systolic.BP, diastolic.BP, Heart.Rate, Daily.Steps), ~ scale(.)[, 1]))
+
+
+# Standardise Numerical Features
+k_sleep_test <- sleep_test %>%
+  mutate(across(c(Age, Quality.of.Sleep, Physical.Activity.Level, Stress.Level, BMI.Category, systolic.BP, diastolic.BP, Heart.Rate, Daily.Steps), ~ scale(.)[, 1]))
+priors_kirsten <- c(
+                        set_prior("student_t(3, 7.34, 1.2)", class = "Intercept"), 
+                        set_prior("student_t(3, 0, 1.5)", class = "sd"),  
+                        set_prior("student_t(3, 0, 2)", class = "sd", group = "Occupation"), 
+                        set_prior("student_t(3, 0, 1.5)", class = "sigma")  
+                      )
+file0 <- file.path(work_directory, "kirsten_slp_m0")
+
+# Kirsten's Model 
+
+kirsten_m0 <- brm(Sleep.Duration ~ Stress.Level + Physical.Activity.Level 
+ + (1 + Stress.Level+ Physical.Activity.Level || Occupation),
+                  data = k_sleep_train,
+                  prior = priors_kirsten,
+                  control = list(adapt_delta = 0.99, max_treedepth = 13),
+                  file = file0)
+```
+
+
+```{r}
+summary(kirsten_m0)
+```
+
+
+
+
+```{r, message = FALSE, results = "hide"}
+
+# Domnik's Gelman Priors  
+Dominik_priors <- c(
+  prior(normal(7.13, 1.98), class = Intercept), 
+  prior(normal(0, 1.12), class = b, coef = "Stress.Level"),
+  prior(normal(0, 1.635375), class = b, coef = "Quality.of.Sleep"),
+  prior(normal(0, 0.48), class = b, coef = "Heart.Rate"),
+  prior(exponential(1.245751), class = sigma),
+  prior(exponential(1.245751), class = sd) # Tau 
+)
+filedmk <- file.path(work_directory, "Dominik_model")
+
+
+# Domnik Model
+Dominik_Model <- brm(
+  formula = Sleep.Duration ~ Stress.Level + Heart.Rate  + Quality.of.Sleep +
+             (1  | Occupation), 
+  data = sleep_train, 
+  family = gaussian(),
+  prior = Dominik_priors, 
+  seed = 123,
+  control = list(adapt_delta = 0.999, max_treedepth = 12),
+  file = filedmk
+)
+
+```
+```{r}
+summary(Dominik_Model)
+```
+
+
+b. Explain each model and describe its structure (what they assume about potential population-
+level or group-level effects), and the type of priors used. 
+
+<!-- EXPLAIN BELOW, REFER TO EACH MODEL -->
+
+> Yiting_model:
+Yiting's model assumes that the sleeping duration increases differently by the stress level of different occupations based on the varibales BMI.Category, systolic.BP, diastolic.BP and Stress.Level. Own priors were used, where the average sleep duration of an adult was set to 7.5 with a standard deviation of 1.3.For systolic and diastolic BP, the mean and standard deviation were set to 120 and 71 for the former as well as  and 80 and 45 for the latter.  The residual standard deviation is given an exponential prior distribution rate 1/sd(y).
+References for the own intercept: Liu et al. (2016) and World Health Organization: WHO (2023) for the own systolic an diastolic blood pressure.
+
+> john_model:
+John's model presumes a relationship between sleep duration as the dependent
+variable and the independent variables sleep quality and presence of a sleep disorder.
+The model is multi-level, grouping by occupation type and making the assumption 
+that occupation type impacts the intercept as well as the slope of the quality of 
+sleep variable. The priors are based on the Gelman et al. (2020) priors. The 'family' 
+argument was set to lognormal in order to create a posterior with no negative values.
+Initial running of the model produced an error about maximum tree depth, but based 
+on appropriate Rhat and ESS values, the cause was presumed not to be misspecification 
+and the maximum tree depth was increased as suggested by the error message. (Stan 
+Development Team, 2022; R: Effective Sample Size (ESS), n.d.)).
+
+> kirsten_m0:
+Kirsten's model is based on the assumption that Stress.level and Physical.Activity.Level are 2 of the most important features to Sleep.Duration. And these features can vary based on occupation(however, the impact of those features on Sleep.Duration among different occupation should be similar). 
+For the own priors an article was found were the average sleep hour in 2011 is 7.34, with a standard deviation lower than 0.98 (however this did not work with the current model, which is why the SD has been incresed by a little )
+Beause of another assumption that the difference between different occupations on sleep should not be too different which is the same for less variety in Stress.level and Physical.Activity.Level, the amount of standard deviation has been lowered for all priors. 
+Reference for the average sleep hour in 2011: Hublin et al. (2020).
+
+> Dominik_Model:
+Dominik's Model predicts Sleep.Duration based on Stress Level, Heart Rate, and Quality of Sleep, with varying intercepts for each Occupation level. The priors are based on Gelman et al. (2020), and the model uses a Gaussian family.For the fixed effects (population-level effects), Stress Level, Heart Rate, and Quality of Sleep are assumed to have a linear relationship with sleep.Duration across all observations. By including a random effect (group-level effect) for Occupation, the model allows the intercept of sleep duration to vary across different occupations.The estimate of 0.24 for sd(Intercept) indicates that sleep duration varies across different occupations, but only to a small extent. Similar to John's model, there has been intially an issue with running the model, but it was fixed by increasing the maximum tree depth.
+
+> Xiaojun_model:
+The model assumes the relationship between Sleep.Duration and several independent variables, including Quality.of.Sleep, Stress.Level, BMI.Category, Heart.Rate , Sleep.Disorder, and Age(They were chosen because they have higher correlation (>0.3) with target variable for Sleep.Duration). Furthermore, an interaction between Sleep.Disorder and Stress.Level has been included in the model as well as the cluster for Occupation. Therefore, this model takes into account both the overall effect of stress level on sleep duration and the individual differences in this effect that may occur in different occupation types. To ensure that the posterior distribution contains no negative values, the family parameter is set to log normal. The priors are based on recommendations by Gelman et al. (2020).
+
+
+## 4. Model checking (3pt)
+
+a. Perform a prior sensitivity analysis for each model and modify the model if appropriate. Justify.
+
+```{r}
+powerscale_sensitivity(Yiting_model)
+```
+```{r}
+powerscale_sensitivity(Xiaojun_model)
+```
+```{r}
+powerscale_sensitivity(john_model)
+```
+```{r}
+powerscale_sensitivity(kirsten_m0)
+```
+```{r}
+powerscale_sensitivity(Dominik_Model)
+```
+
+
+<!-- EXPLAIN CONCLUSIONS AND WHETHER MODELS ARE KEPT, MODIFIED  -->
+
+> Yiting_model:
+The prior sensitivity analysis for Yiting's model indicates  that for each variable, there were no conflict between the own set priors and the likelihood. 
+
+> john_model:
+John's model has not been flagged for any diagnoses with the powerscale_sensitivity 
+function. Along with no errors in the fitting process, this suggests the model is
+properly specified. Therefore, no adjustments were made.
+
+> kirsten_m0:
+Kirsten's model also did no show any conflict in the sensitivity analysis, therefore the model was not changed.
+
+> Dominik_Model:
+Dominik's model did not reveal any conflicts in the sensitivity analysis of the priors, including both prior-data conflicts and conflicts between strong and weak priors. This suggests that the chosen prior specifications were appropriate and did not bias the posterior inference.
+
+> Xiaojun_model: 
+There is no conlict shown in the diagnosis, which mean my model and prior are reasonable.
+
+
+b. Conduct posterior predictive checks for each model to assess how well they fit the data.
+Explain what you conclude.
+
+```{r}
+pp_check(Yiting_model, ndraws = 200)
+pp_check(Yiting_model, type = "stat_2d")
+pp_check(Yiting_model, type = "intervals", x="Stress.Level", prob_outer = .95) + 
+  xlab("Stress.Level")
+```
+```{r}
+pp_check(Xiaojun_model, ndraws = 200)
+pp_check(Xiaojun_model, type = "stat_2d")
+pp_check(Xiaojun_model, type = "intervals_grouped",x ='Stress.Level', group = "Occupation", prob_outer = .95) + 
+  xlab("Stress.Level")
+```
+```{r}
+pp_check(john_model, ndraws = 200)
+pp_check(john_model, type = "intervals_grouped",
+         x = "Quality.of.Sleep",
+         group = "Occupation",
+         prob_outer = .95) + 
+  xlab("Quality.of.Sleep")
+pp_check(john_model, type = "stat_2d")
+```
+```{r}
+pp_check(kirsten_m0, ndraws = 200)
+pp_check(kirsten_m0, type = "stat_2d")
+pp_check(kirsten_m0, type = "intervals_grouped", x = 'Stress.Level', group = "Occupation", prob_outer = .95) + 
+  xlab("Stress.Level")
+```
+```{r}
+pp_check(Dominik_Model, ndraws = 200)
+pp_check(Dominik_Model, type = "stat_2d")
+pp_check(Dominik_Model, type = "intervals_grouped", x = 'Stress.Level', group = "Occupation", prob_outer = .95) + 
+  xlab("Quality.of.Sleep")
+
+
+```
+
+
+<!-- EXPLAIN CONCLUSIONS -->
+
+> Yiting_model:
+From posterior predictive checks, the fit of the model seems fine. On the curve graph, the overall shape of the ypred aligns with the oberved y. The scatter plot shows that the observed mean and sd of y is located at the center the posterior predictive points. The ypred points on the interval plot doesn't seem to overlap with the y from oberved data but has not gone awfully wrong as they are in the 95% interval.
+
+> john_model:
+In John's model the fit of the posterior to the observed data is imperfect, but not systematically biased. The default plot shows the posterior distribution is heavier tailed than
+the data with less dramatic peaks, but the general shape follows the pattern of 
+the data. The grouped intervals plot shows that there are not systematic errors.
+Finally, the scatter plot of mean and standard deviation shows that the data is 
+well within the distribution of means and standard deviations from posterior draws
+but it is not the exact midpoint. The inexactness may be contributed to by the weakness
+of the priors.
+
+> kirsten_m0
+Compared to Dominik’s model fit, Kirsten’s model fits better as the observed data line overlaps with the 200 drawn replicated lines. The grouped plot shows that at all stress level, obersived values are mostly surrounded by 95% interval which suggests that this model can generally present relationship between chosen features and tartget features.
+
+> Dominik_Model:
+The posterior predictive check for Dominik’s model shows in 200 draws that the observed data do not follow an exact normal distribution because of two valleys in the middle.  Contrarily, the 200 replicated datasets display minor valleys as well but tend to end up in a normal distribution. While the fit of Dominik's model is not perfect, adding more predictors as shown  in Xiaojun's model could improve the model's fit more. Furthermore, in the 2-dimensional summary statistic plot, the observed data appears to be surrounded by a fairly dense cloud of replicated data, indicating that the model is adept at capturing broader structure of the observed data.
+
+> Xiaojun_model: 
+Based on the posterior predictive checks, it seems the model fits generally with the observed data.
+
+
+## 5. Model Comparison (1.5pt)
+
+a. Use k-fold cross-validation to compare the models.
+```{r}
+set.seed(123)
+k <- loo::kfold_split_random(K = 5, N = nrow(sleep_train))
+
+kf_xiaojun <- kfold(Xiaojun_model, folds = k, chains = 1, save_fits = TRUE)
+kf_xiaojun
+```
+```{r}
+kf_yiting <- kfold(Yiting_model, folds = k, chains = 1, save_fits = TRUE)
+kf_yiting
+```
+```{r}
+kf_kirsten <- kfold(kirsten_m0, folds = k, chains = 1, save_fits = TRUE)
+kf_kirsten
+```
+
+```{r}
+kf_john <- kfold(john_model, folds = k, chains = 1, save_fits = TRUE)
+kf_john
+```
+```{r}
+kf_dominik <- kfold(Dominik_Model, folds = k, chains = 1, save_fits = TRUE)
+kf_dominik
+```
+
+```{r}
+loo_compare(kf_john, kf_kirsten, kf_yiting, kf_xiaojun,kf_dominik)
+```
+
+
+b. Determine the best model based on predictive accuracy and justify your decision.
+
+<!-- DECISION -->
+
+> We performed a 5 fold cross validation, allowing us to have folds of approximately
+75 observations each. Based on the output of the loo_compare function, the best 
+performing model appears to be kirsten_m0  Despite seeming large, the standard 
+errors do not exceed the ELPD differences, the differences are larger than 4, and
+our sample size is 374. This suggests discernably better performance by kirsten_m0 
+over the other models.
+
+## 6. Interpretation of Important Parameters (1.5pt)
+
+
+
+Choose one of the best models and interpret its most important parameters.
+
+<!-- INTERPRETATION AND CODE GOES HERE -->
+
+```{r}
+kirsten_m0
+
+```
+We chose occupation as a multilevel variable. a standard deviation of 0.26 means that among different occupations, there is around 0.26 hour difference among each other, which can be meaningful. The SD on Stress.Level as well as Physical.Activity.Level as random effects are respectively 0.39 and 0.42, which means people's sleep duration in different occupation are impacted by those differently. 
+When a patient has average Stress.Level and Physical.Activity.Level, the intercept suggest that their mean sleep duration might be 7.1, with a 95%CI from 6.89 to 7.28. However, for Physical.Activity.Level and Stress.Level, the directions of their relationships with sleep duration and the confidence we have in those directional relationships provides more meaningful information than the point estimates, due to independent variable standardization.
+
+
+
+## 7. Report a loss function on the test set (Optional for bonus 0.5 to 1pt, depending on if you use RMSE or another function).
+
+Report RMSE or other loss (or utility) function on the test set. (Transform it back if necessary).
+
+
+
+```{r}
+# fit the model
+prediction <- data.frame(fitted(kirsten_m0, newdata = k_sleep_test))
+prediction.sleep.duration <- prediction$Estimate
+actual.sleep.duration <- k_sleep_test$Sleep.Duration
+mse(actual.sleep.duration,prediction.sleep.duration)
+rmse(actual.sleep.duration,prediction.sleep.duration)
+```
+
+
+# Contributions of each member 
+
+-Kirsten Hu. Combining all data models, batch sensitivity check and pp_check. Answered question 6 and 7
+
+-John: found the data set on Kaggle, John’s model and analysis, Answered question 6 
+
+-Dominik: Answered question 1, Dominik’s model and analysis
+
+-Yiting: Data Processing, Data Splitting, Yiting’s model and analysis
+
+-Xiaojun:  Answered question 4 , Xiaojun’s model and analysis
+
+# Statement of technology
+
+> The citation generator at Scribbr.com was used in creation of in text citations
+and the reference list (Citation Generator, 2024).
+
+# References
+
+<!-- Complete if necessary -->
+
+Citation generator. (2024, January 10). Scribbr. Retrieved May 31, 2024, from https://www.scribbr.com/citation/generator/ 
+
+Gelman, A., Hill, J., & Vehtari, A. (2020). Regression and other stories. https://doi.org/10.1017/9781139161879 
+
+Hublin, C., Haasio, L., & Kaprio, J. (2020). Changes in self-reported sleep duration with age - a 36-year longitudinal study of Finnish adults. BMC Public Health, 20(1). https://doi.org/10.1186/s12889-020-09376-z 
+
+Liu, Y., Wheaton, A. G., Chapman, D. P., Cunningham, T. J., Lu, H., & Croft, J. B. (2016). Prevalence of Healthy Sleep Duration among Adults — United States, 2014. Morbidity and Mortality Weekly Report, 65(6), 137–141. https://doi.org/10.15585/mmwr.mm6506a1 
+
+R: Effective Sample Size (ESS). (n.d.). https://search.r-project.org/CRAN/refmans/bayestestR/html/effective_sample.html 
+
+Stan Development Team. (2022, March 10). Runtime warnings and convergence problems. https://mc-stan.org/misc/warnings.html#maximum-treedepth-exceeded 
+
+Tharmalingam, L. (2023, September 18). Sleep Health and Lifestyle Dataset. Kaggle. https://www.kaggle.com/datasets/uom190346a/sleep-health-and-lifestyle-dataset 
+
+World Health Organization: WHO. (2023, March 16). Hypertension. https://www.who.int/news-room/fact-sheets/detail/hypertension#:~:text=Overview,get%20your%20blood%20pressure%20checked
