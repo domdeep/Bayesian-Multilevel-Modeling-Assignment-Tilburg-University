@@ -26,7 +26,7 @@ This group project involved applying **Bayesian multilevel models** to a dataset
 
 ## Project Structure:
 - **Code**: All R code is available in the form of **RMarkdown** files.
-- **Report**: A detailed report, including model comparison, sensitivity analysis, and posterior predictive checks, is provided in **HTML** and **PDF** format.
+- **Report**: A detailed report, including model comparison, sensitivity analysis, and posterior predictive checks, is provided in **PDF** format.
 
 ## Group Members
 - **Dominik Nguyen** (Model Fitting, Prior Sensitivity Analysis)
@@ -35,7 +35,4 @@ This group project involved applying **Bayesian multilevel models** to a dataset
 - **[Team Member 4 Name]** (Parameter Interpretation, Report Writing)
 - **[Team Member 5 Name]** (Project Coordination, Final Report Compilation)
 
-## Files Included
-- **Bayesian_Assignment_Dominik_Nguyen.Rmd**: RMarkdown file containing the full code and analysis.
-- **Bayesian_Multilevel_Report.pdf**: Final report in PDF format.
-- **sleep_health_dataset.csv**: The dataset used for analysis.
+
