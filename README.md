@@ -38,5 +38,4 @@ This group project involved applying **Bayesian multilevel models** to a dataset
 ## Files Included
 - **Bayesian_Assignment_Dominik_Nguyen.Rmd**: RMarkdown file containing the full code and analysis.
 - **Bayesian_Multilevel_Report.pdf**: Final report in PDF format.
-- **Bayesian_Multilevel_Report.html**: Final report in HTML format.
 - **sleep_health_dataset.csv**: The dataset used for analysis.
